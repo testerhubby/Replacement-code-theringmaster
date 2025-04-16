@@ -1,0 +1,891 @@
+local player = game.Players.LocalPlayer
+local char = player.Character or player.CharacterAdded:Wait()
+local humanoid = char:FindFirstChildOfClass("Humanoid")
+local rootPart = char:FindFirstChild("HumanoidRootPart")
+local userInput = game:GetService("UserInputService")
+local runService = game:GetService("RunService")
+local tweenService = game:GetService("TweenService")
+local debris = game:GetService("Debris")
+
+-- Animation IDs
+local ANIMATIONS = {
+    Idle = "rbxassetid://131082534135875",
+    Walk = "rbxassetid://108018357044094",
+    Run = "rbxassetid://136252471123500",
+    InjuredIdle = "rbxassetid://132377038617766",
+    InjuredWalk = "rbxassetid://134624270247120",
+    InjuredRun = "rbxassetid://115946474977409",
+    LightningTeleport = "rbxassetid://112866283555060",
+    AttackPose = "rbxassetid://93448124548282",
+    AttackPoseIdle = "rbxassetid://83179976712890",
+    AttackPoseWalk = "rbxassetid://108018357044094",
+    IceEffect = "rbxassetid://117339039533356",
+    Dash = "rbxassetid://133133989835533"
+}
+
+-- Sound IDs
+local SOUNDS = {
+    LightningTeleport = "6994934244",
+    FireSpeedBoost = "8208591201",
+    FireSpeedBoostEnd = "8208593535",
+    FireSound = "9068935533",
+    ElementSwitch = "535716488",
+    WallSpawnBreak = "9117847679",
+    IceCrack = "9117847679",
+    BallThrow = "9117847679",
+    DashSound = "9117847679"
+}
+
+-- Shedletsky Expressions
+local SHEDLETSKY_EXPRESSIONS = {
+    Happy = "rbxassetid://82283357943859",
+    Concentrating = "rbxassetid://78904701836731",
+    Default = "rbxassetid://80832862157058",
+    Hurt = "rbxassetid://101409803425726",
+    Injured = "rbxassetid://85208637488106",
+    Drinking = "rbxassetid://77510585834915"
+}
+
+-- State variables
+local currentElement = "Lightning"
+local elementalHelmCooldown = false
+local switchCooldown = false
+local isOnFire = false
+local isCharged = false
+local hasResistance = false
+local wall = nil
+local tree = nil
+local apples = {}
+local screenGui = nil
+local abilityButtons = {}
+local currentAnimations = {}
+local isInAttackPose = false
+local canThrowBall = true
+local iceFloor = nil
+local ballModel = nil
+
+-- Killer names
+local KILLER_NAMES = {
+    "1x1x1x1", "c00lkidd", "Jason", "JohnDoe", "John Doe", "John doe", "Johndoe"
+}
+
+-- Cooldowns
+local COOLDOWNS = {
+    ElementalHelm = 10,
+    Switch = 8,
+    BallThrow = 1,  -- Cooldown para ENTRAR no modo de ataque
+    BallDash = 5   -- Cooldown após usar o DASH/THROW
+}
+
+-- Element colors
+local ELEMENT_COLORS = {
+    Lightning = Color3.fromRGB(0, 200, 255),
+    Fire = Color3.fromRGB(255, 100, 0),
+    Ice = Color3.fromRGB(0, 150, 255),
+    Earth = Color3.fromRGB(100, 70, 0),
+    Air = Color3.fromRGB(200, 200, 255)
+}
+
+-- Character check
+local function isRingmaster()
+    return char.Name == "TheRingmaster" or char.Name == "Shedletsky"
+end
+
+-- Check if player is a killer
+local function isKiller(character)
+    if not character then return false end
+    for _, name in ipairs(KILLER_NAMES) do
+        if character.Name:lower() == name:lower() then
+            return true
+        end
+    end
+    return false
+end
+
+-- Update expressions for Shedletsky
+local function updateExpressions()
+    if char.Name == "Shedletsky" then
+        local expressionHolder = char:FindFirstChild("ExpressionHolder")
+        if expressionHolder then
+            for expressionName, textureId in pairs(SHEDLETSKY_EXPRESSIONS) do
+                local expression = expressionHolder:FindFirstChild(expressionName)
+                if not expression then
+                    expression = Instance.new("Decal")
+                    expression.Name = expressionName
+                    expression.Face = Enum.NormalId.Front
+                    expression.Parent = expressionHolder
+                end
+                expression.Texture = textureId
+            end
+        end
+    end
+end
+
+-- Animation handling
+local function loadAnimation(animationId)
+    local animation = Instance.new("Animation")
+    animation.AnimationId = animationId
+    return humanoid:LoadAnimation(animation)
+end
+
+local function stopAllAnimations()
+    for _, anim in pairs(currentAnimations) do
+        anim:Stop()
+    end
+    currentAnimations = {}
+end
+
+local function playAnimation(animationName)
+    if not ANIMATIONS[animationName] then return end
+    stopAllAnimations()
+    local anim = loadAnimation(ANIMATIONS[animationName])
+    anim:Play()
+    currentAnimations[animationName] = anim
+    return anim
+end
+
+-- Sound functions
+local function playSound(soundId, parent, volume)
+    local sound = Instance.new("Sound")
+    sound.SoundId = "rbxassetid://" .. soundId
+    sound.Volume = volume or 1
+    sound.Parent = parent or workspace
+    sound:Play()
+    debris:AddItem(sound, sound.TimeLength + 1)
+end
+
+-- Element effects
+local function createElementEffect(element, position)
+    local effect = Instance.new("Part")
+    effect.Size = Vector3.new(1, 1, 1)
+    effect.Position = position
+    effect.Transparency = 1
+    effect.CanCollide = false
+    effect.Anchored = true
+    effect.Parent = workspace
+
+    local emitter = Instance.new("ParticleEmitter")
+    emitter.LightEmission = 1
+    emitter.Lifetime = NumberRange.new(1, 2)
+    emitter.Rate = 50
+    emitter.Speed = NumberRange.new(5, 10)
+    
+    if element == "Lightning" then
+        emitter.Texture = "rbxassetid://245050537"
+        emitter.Color = ColorSequence.new(ELEMENT_COLORS.Lightning)
+    elseif element == "Fire" then
+        emitter.Texture = "rbxassetid://242719672"
+        emitter.Color = ColorSequence.new(ELEMENT_COLORS.Fire)
+    elseif element == "Ice" then
+        emitter.Texture = "rbxassetid://245050537"
+        emitter.Color = ColorSequence.new(ELEMENT_COLORS.Ice)
+    elseif element == "Earth" then
+        emitter.Texture = "rbxassetid://243664672"
+        emitter.Color = ColorSequence.new(ELEMENT_COLORS.Earth)
+    elseif element == "Air" then
+        emitter.Texture = "rbxassetid://243664672"
+        emitter.Color = ColorSequence.new(ELEMENT_COLORS.Air)
+    end
+    
+    emitter.Parent = effect
+    debris:AddItem(effect, 3)
+    return effect
+end
+
+-- Earth wall model
+local function createEarthWallModel()
+    local wallModel = Instance.new("Model")
+    wallModel.Name = "EarthWall"
+    
+    local mainPart = Instance.new("Part")
+    mainPart.Size = Vector3.new(10, 6, 1)
+    mainPart.Anchored = true
+    mainPart.CanCollide = true
+    mainPart.Transparency = 0.7
+    mainPart.Color = ELEMENT_COLORS.Earth
+    mainPart.Material = Enum.Material.Slate
+    mainPart.Parent = wallModel
+    
+    for i = 1, 3 do
+        local crack = Instance.new("Part")
+        crack.Size = Vector3.new(10, 0.2, 0.5)
+        crack.CFrame = mainPart.CFrame * CFrame.new(0, math.random(-2, 2), 0)
+        crack.Anchored = true
+        crack.CanCollide = false
+        crack.Color = Color3.fromRGB(50, 35, 0)
+        crack.Parent = wallModel
+    end
+    
+    return wallModel
+end
+
+-- Healing tree model
+local function createHealingTreeModel()
+    local treeModel = Instance.new("Model")
+    treeModel.Name = "HealingTree"
+    
+    local base = Instance.new("Part")
+    base.Size = Vector3.new(4, 1, 4)
+    base.Anchored = true
+    base.CanCollide = true
+    base.Transparency = 0.7
+    base.Color = Color3.fromRGB(0, 100, 0)
+    base.Material = Enum.Material.Grass
+    base.Parent = treeModel
+    
+    local trunk = Instance.new("Part")
+    trunk.Size = Vector3.new(2, 8, 2)
+    trunk.Anchored = true
+    trunk.CanCollide = true
+    trunk.Color = Color3.fromRGB(100, 70, 0)
+    trunk.Material = Enum.Material.Wood
+    trunk.Parent = treeModel
+    
+    local leaves = Instance.new("Part")
+    leaves.Size = Vector3.new(8, 6, 8)
+    leaves.Anchored = true
+    leaves.CanCollide = true
+    leaves.Transparency = 0.7
+    leaves.Color = Color3.fromRGB(0, 200, 0)
+    leaves.Material = Enum.Material.Grass
+    leaves.Shape = Enum.PartType.Ball
+    leaves.Parent = treeModel
+    
+    base.Position = Vector3.new(0, 0.5, 0)
+    trunk.Position = Vector3.new(0, 5, 0)
+    leaves.Position = Vector3.new(0, 10, 0)
+    
+    return treeModel
+end
+
+-- Ball model
+local function createBallModel()
+    local ball = Instance.new("Part")
+    ball.Name = "AttackBall"
+    ball.Size = Vector3.new(1.5, 1.5, 1.5)
+    ball.Shape = Enum.PartType.Ball
+    ball.Color = Color3.fromRGB(255, 0, 0)
+    ball.Material = Enum.Material.Neon
+    ball.CanCollide = false
+    ball.Transparency = 0.3
+    
+    local glow = Instance.new("SurfaceLight")
+    glow.Brightness = 5
+    glow.Range = 6
+    glow.Color = Color3.fromRGB(255, 50, 50)
+    glow.Parent = ball
+    
+    return ball
+end
+
+-- Ice floor model
+local function createIceFloor(position)
+    if iceFloor and iceFloor.Parent then iceFloor:Destroy() end
+    
+    local raycastParams = RaycastParams.new()
+    raycastParams.FilterDescendantsInstances = {char}
+    raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
+    
+    local raycastResult = workspace:Raycast(position, Vector3.new(0, -100, 0), raycastParams)
+    local floorPosition = raycastResult and raycastResult.Position or position
+    
+    local icePart = Instance.new("Part")
+    icePart.Size = Vector3.new(20, 0.2, 20)
+    icePart.Position = floorPosition + Vector3.new(0, 0.1, 0)
+    icePart.Anchored = true
+    icePart.CanCollide = false
+    icePart.Transparency = 0.5
+    icePart.Color = ELEMENT_COLORS.Ice
+    icePart.Material = Enum.Material.Ice
+    icePart.Parent = workspace
+    iceFloor = icePart
+    
+    local emitter = Instance.new("ParticleEmitter")
+    emitter.Texture = "rbxassetid://245050537"
+    emitter.Color = ColorSequence.new(ELEMENT_COLORS.Ice)
+    emitter.LightEmission = 0.5
+    emitter.Size = NumberSequence.new(0.5)
+    emitter.Lifetime = NumberRange.new(1, 2)
+    emitter.Rate = 20
+    emitter.Speed = NumberRange.new(1, 3)
+    emitter.Parent = icePart
+    
+    playSound(SOUNDS.IceCrack, icePart)
+    
+    icePart.Touched:Connect(function(hit)
+        local character = hit.Parent
+        if character and isKiller(character) then
+            icePart:Destroy()
+            humanoid.WalkSpeed = humanoid.WalkSpeed * 1.5
+            task.delay(3, function()
+                if humanoid then
+                    humanoid.WalkSpeed = humanoid.WalkSpeed / 1.5
+                end
+            end)
+        end
+    end)
+    
+    return icePart
+end
+
+-- Earth wall
+local function createEarthWall(position, lookVector)
+    if wall and wall.Parent then wall:Destroy() end
+    
+    local wallModel = createEarthWallModel()
+    wallModel.PrimaryPart = wallModel:FindFirstChildWhichIsA("Part")
+    wallModel:SetPrimaryPartCFrame(CFrame.new(position + lookVector * 5, position + lookVector * 10))
+    wallModel.Parent = workspace
+    wall = wallModel
+    
+    playSound(SOUNDS.WallSpawnBreak, wallModel)
+    createElementEffect("Earth", wallModel.PrimaryPart.Position)
+    
+    for _, part in ipairs(wallModel:GetDescendants()) do
+        if part:IsA("BasePart") then
+            part.Touched:Connect(function(hit)
+                local humanoid = hit.Parent:FindFirstChildOfClass("Humanoid")
+                if humanoid and isKiller(humanoid.Parent) then
+                    playSound(SOUNDS.WallSpawnBreak, wallModel)
+                    wallModel:Destroy()
+                    
+                    local originalSpeed = player.Character.Humanoid.WalkSpeed
+                    player.Character.Humanoid.WalkSpeed = originalSpeed * 1.5
+                    
+                    task.delay(3, function()
+                        if player.Character and player.Character.Humanoid then
+                            player.Character.Humanoid.WalkSpeed = originalSpeed
+                        end
+                    end)
+                end
+            end)
+        end
+    end
+    
+    return wallModel
+end
+
+-- Healing tree
+local function createHealingTree(position)
+    if tree and tree.Parent then tree:Destroy() end
+    
+    local treeModel = createHealingTreeModel()
+    treeModel.PrimaryPart = treeModel:FindFirstChildWhichIsA("Part")
+    treeModel:SetPrimaryPartCFrame(CFrame.new(position))
+    treeModel.Parent = workspace
+    tree = treeModel
+    
+    -- Spawn apples
+    for i = 1, 3 do
+        task.delay(i * 2, function()
+            if treeModel and treeModel.Parent then
+                local apple = createAppleModel()
+                apple.Position = treeModel.PrimaryPart.Position + Vector3.new(math.random(-3, 3), 5, math.random(-3, 3))
+                apple.Parent = workspace
+                table.insert(apples, apple)
+                
+                apple.Touched:Connect(function(hit)
+                    local humanoid = hit.Parent:FindFirstChildOfClass("Humanoid")
+                    if humanoid and humanoid.Parent == char then
+                        humanoid.Health = humanoid.Health + 20
+                        apple:Destroy()
+                    end
+                end)
+                
+                task.delay(20, function()
+                    if apple and apple.Parent then
+                        apple:Destroy()
+                    end
+                end)
+            end
+        end)
+    end
+    
+    task.delay(30, function()
+        if treeModel and treeModel.Parent then
+            treeModel:Destroy()
+        end
+    end)
+    
+    return treeModel
+end
+
+-- Movement control
+local function setCharacterFrozen(freeze)
+    if not rootPart or not humanoid then return end
+    rootPart.Anchored = freeze
+    if freeze then
+        humanoid.WalkSpeed = 0
+        humanoid.JumpPower = 0
+    else
+        humanoid.WalkSpeed = isInAttackPose and 7 or 16
+        humanoid.JumpPower = 0
+    end
+end
+
+-- Speed boost with fire damage
+local function boostPlayerSpeed(duration, multiplier)
+    local originalSpeed = humanoid.WalkSpeed
+    humanoid.WalkSpeed = originalSpeed * multiplier
+    playSound(SOUNDS.FireSpeedBoost, char)
+    
+    local damagePerTick = 0.6
+    for i = 1, 5 do
+        if humanoid and humanoid.Health > 0 then
+            humanoid:TakeDamage(damagePerTick)
+            task.wait(1)
+        else
+            break
+        end
+    end
+    
+    task.delay(duration, function()
+        if humanoid then
+            playSound(SOUNDS.FireSpeedBoostEnd, char)
+            humanoid.WalkSpeed = originalSpeed
+            isOnFire = false
+        end
+    end)
+end
+
+-- Lightning teleport ability
+local function lightningTeleport()
+    local teleportDistance = 90
+    
+    local raycastParams = RaycastParams.new()
+    raycastParams.FilterDescendantsInstances = {char}
+    raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
+    
+    local raycastResult = workspace:Raycast(
+        rootPart.Position,
+        rootPart.CFrame.LookVector * teleportDistance,
+        raycastParams
+    )
+    
+    local destination
+    if raycastResult then
+        destination = CFrame.new(raycastResult.Position + Vector3.new(0, 3, 0))
+        teleportDistance = (raycastResult.Position - rootPart.Position).Magnitude
+    else
+        destination = rootPart.CFrame + rootPart.CFrame.LookVector * teleportDistance
+    end
+    
+    setCharacterFrozen(true)
+    playAnimation("LightningTeleport")
+    playSound(SOUNDS.LightningTeleport, char)
+    createElementEffect("Lightning", rootPart.Position)
+    
+    task.delay(0.5, function()
+        if rootPart and rootPart.Parent then
+            rootPart.CFrame = destination
+            createElementEffect("Lightning", destination.Position)
+            setCharacterFrozen(false)
+        end
+    end)
+end
+
+-- Lightning charge ability
+local function lightningCharge()
+    isCharged = true
+    playSound(SOUNDS.LightningTeleport, char)
+    createElementEffect("Lightning", rootPart.Position)
+    
+    local hitConnection
+    hitConnection = humanoid.Hit:Connect(function()
+        if isCharged then
+            humanoid.WalkSpeed = humanoid.WalkSpeed * 1.5
+            task.delay(2, function()
+                if humanoid then
+                    humanoid.WalkSpeed = humanoid.WalkSpeed / 1.5
+                end
+            end)
+            isCharged = false
+        end
+    end)
+    
+    task.delay(2, function()
+        isCharged = false
+        if hitConnection then hitConnection:Disconnect() end
+    end)
+end
+
+-- Ball throw ability
+local function createBallInHand()
+    if ballModel and ballModel.Parent then ballModel:Destroy() end
+    
+    local rightHand = char:FindFirstChild("RightHand") or char:FindFirstChild("Right Arm")
+    if not rightHand then return end
+    
+    ballModel = createBallModel()
+    local weld = Instance.new("WeldConstraint")
+    weld.Part0 = rightHand
+    weld.Part1 = ballModel
+    weld.Parent = ballModel
+    
+    ballModel.Parent = char
+end
+
+local function removeBallFromHand()
+    if ballModel and ballModel.Parent then
+        ballModel:Destroy()
+        ballModel = nil
+    end
+end
+
+local function enterAttackPose()
+    isInAttackPose = true
+    humanoid.WalkSpeed = 7
+    abilityButtons.ThrowBall.Text = "THROW"
+    playAnimation("AttackPose")
+    createBallInHand()
+    
+    humanoid.Running:Connect(function(speed)
+        if not isInAttackPose then return end
+        if speed > 0 then
+            playAnimation("AttackPoseWalk")
+        else
+            playAnimation("AttackPoseIdle")
+        end
+    end)
+end
+
+local function throwBall()
+    if not isInAttackPose then return end
+    
+    playAnimation("Dash")
+    removeBallFromHand()
+    
+    local dashVelocity = Instance.new("BodyVelocity")
+    dashVelocity.Velocity = rootPart.CFrame.LookVector * 80
+    dashVelocity.MaxForce = Vector3.new(1, 1, 1) * math.huge
+    dashVelocity.Parent = rootPart
+    debris:AddItem(dashVelocity, 0.3)
+    
+    local hitbox = Instance.new("Part")
+    hitbox.Size = Vector3.new(6, 6, 8)
+    hitbox.CFrame = rootPart.CFrame + rootPart.CFrame.LookVector * 6
+    hitbox.CanCollide = false
+    hitbox.Transparency = 1
+    hitbox.Parent = workspace
+    
+    hitbox.Touched:Connect(function(hit)
+        local targetPlayer = game.Players:GetPlayerFromCharacter(hit.Parent)
+        if targetPlayer and isKiller(targetPlayer.Character) then
+            local killerHumanoid = targetPlayer.Character:FindFirstChildOfClass("Humanoid")
+            if killerHumanoid then
+                local originalSpeed = killerHumanoid.WalkSpeed
+                killerHumanoid.WalkSpeed = 0
+                
+                task.delay(3, function()
+                    if killerHumanoid and killerHumanoid.Parent then
+                        killerHumanoid.WalkSpeed = originalSpeed
+                    end
+                end)
+            end
+        end
+    end)
+    
+    debris:AddItem(hitbox, 0.5)
+    
+    isInAttackPose = false
+    humanoid.WalkSpeed = 5
+    abilityButtons.ThrowBall.Text = "THROW BALL"
+    abilityButtons.ThrowBall.Active = false
+    abilityButtons.ThrowBallCooldown.Visible = true
+    
+    local cooldownEnd = tick() + COOLDOWNS.BallDash
+    local cooldownLoop = runService.Heartbeat:Connect(function()
+        local remaining = cooldownEnd - tick()
+        if remaining <= 0 then
+            canThrowBall = true
+            abilityButtons.ThrowBall.Active = true
+            abilityButtons.ThrowBallCooldown.Visible = false
+            cooldownLoop:Disconnect()
+        else
+            abilityButtons.ThrowBallCooldown.Text = tostring(math.ceil(remaining))
+        end
+    end)
+end
+
+local function useThrowBall()
+    if not canThrowBall or not isRingmaster() then return end
+    
+    if not isInAttackPose then
+        canThrowBall = false
+        enterAttackPose()
+        
+        task.delay(COOLDOWNS.BallThrow, function()
+            canThrowBall = true
+        end)
+    else
+        canThrowBall = false
+        throwBall()
+    end
+end
+
+-- Elemental Helm ability
+local function useElementalHelm()
+    if elementalHelmCooldown or not isRingmaster() then return end
+    
+    elementalHelmCooldown = true
+    abilityButtons.ElementalHelm.Active = false
+    abilityButtons.ElementalHelmCooldown.Visible = true
+    
+    -- Apply cooldown immediately
+    local cooldownEnd = tick() + COOLDOWNS.ElementalHelm
+    local cooldownLoop = runService.Heartbeat:Connect(function()
+        local remaining = cooldownEnd - tick()
+        if remaining <= 0 then
+            elementalHelmCooldown = false
+            abilityButtons.ElementalHelm.Active = true
+            abilityButtons.ElementalHelmCooldown.Visible = false
+            cooldownLoop:Disconnect()
+        else
+            abilityButtons.ElementalHelmCooldown.Text = tostring(math.ceil(remaining))
+        end
+    end)
+    
+    if currentElement == "Lightning" then
+        if math.random() < 0.5 then
+            lightningTeleport()
+        else
+            lightningCharge()
+        end
+    elseif currentElement == "Fire" then
+        isOnFire = true
+        playSound(SOUNDS.FireSound, char)
+        createElementEffect("Fire", rootPart.Position)
+        boostPlayerSpeed(5, 1.8)
+    elseif currentElement == "Ice" then
+        hasResistance = true
+        createElementEffect("Ice", rootPart.Position)
+        
+        -- Wait for animation to finish before creating ice floor
+        task.delay(0.5, function()
+            createIceFloor(rootPart.Position)
+        end)
+        
+        humanoid:SetAttribute("DamageReduction", 0.5)
+        
+        local originalSpeed = humanoid.WalkSpeed
+        humanoid.WalkSpeed = originalSpeed * 0.7
+        
+        task.delay(10, function()
+            if humanoid then
+                humanoid:SetAttribute("DamageReduction", 0)
+                humanoid.WalkSpeed = originalSpeed
+                hasResistance = false
+            end
+        end)
+    elseif currentElement == "Earth" then
+        if math.random() < 0.5 then
+            createEarthWall(rootPart.Position, rootPart.CFrame.LookVector)
+        else
+            createHealingTree(rootPart.Position + rootPart.CFrame.LookVector * 5)
+        end
+    elseif currentElement == "Air" then
+        local dashVelocity = Instance.new("BodyVelocity")
+        dashVelocity.Velocity = rootPart.CFrame.LookVector * 100
+        dashVelocity.MaxForce = Vector3.new(1, 1, 1) * math.huge
+        dashVelocity.Parent = rootPart
+        playSound(SOUNDS.WallSpawnBreak, char)
+        createElementEffect("Air", rootPart.Position)
+        
+        debris:AddItem(dashVelocity, 0.4)
+    end
+end
+
+-- Switch ability
+local function useSwitch()
+    if switchCooldown or not isRingmaster() then return end
+    
+    switchCooldown = true
+    abilityButtons.Switch.Active = false
+    abilityButtons.SwitchCooldown.Visible = true
+    
+    local elementOrder = {"Lightning", "Fire", "Ice", "Earth", "Air"}
+    local currentIndex = table.find(elementOrder, currentElement) or 1
+    local nextIndex = currentIndex % #elementOrder + 1
+    currentElement = elementOrder[nextIndex]
+    
+    local originalSpeed = humanoid.WalkSpeed
+    humanoid.WalkSpeed = originalSpeed * 0.5
+    playSound(SOUNDS.ElementSwitch, char)
+    createElementEffect(currentElement, rootPart.Position)
+    
+    -- Update button color and text
+    abilityButtons.ElementalHelm.Text = "Elemental: " .. currentElement
+    abilityButtons.ElementalHelm.BackgroundColor3 = ELEMENT_COLORS[currentElement]
+    
+    task.delay(3, function()
+        if humanoid then
+            humanoid.WalkSpeed = originalSpeed
+        end
+    end)
+    
+    local cooldownEnd = tick() + COOLDOWNS.Switch
+    local cooldownLoop = runService.Heartbeat:Connect(function()
+        local remaining = cooldownEnd - tick()
+        if remaining <= 0 then
+            switchCooldown = false
+            abilityButtons.Switch.Active = true
+            abilityButtons.SwitchCooldown.Visible = false
+            cooldownLoop:Disconnect()
+        else
+            abilityButtons.SwitchCooldown.Text = tostring(math.ceil(remaining))
+        end
+    end)
+end
+
+-- GUI setup
+local function loadAbilityGUI()
+    screenGui = Instance.new("ScreenGui")
+    screenGui.Parent = player:WaitForChild("PlayerGui")
+
+    local buttonFrame = Instance.new("Frame")
+    buttonFrame.Size = UDim2.new(0.3, 0, 0.2, 0)
+    buttonFrame.Position = UDim2.new(0.35, 0, 0.7, 0)
+    buttonFrame.BackgroundColor3 = Color3.new(0.2, 0.2, 0.2)
+    buttonFrame.Active = true
+    buttonFrame.Draggable = true
+    buttonFrame.Parent = screenGui
+
+    local buttonProperties = {
+        Size = UDim2.new(0.95, 0, 0.2, 0),
+        BackgroundColor3 = Color3.new(0.1, 0.1, 0.1),
+        TextColor3 = Color3.new(1, 1, 1),
+        TextScaled = true
+    }
+
+    -- Elemental Helm Button
+    local elementalHelmButton = Instance.new("TextButton")
+    elementalHelmButton.Position = UDim2.new(0.025, 0, 0.025, 0)
+    elementalHelmButton.Text = "Elemental: " .. currentElement
+    elementalHelmButton.BackgroundColor3 = ELEMENT_COLORS[currentElement]
+    elementalHelmButton.Parent = buttonFrame
+    for prop, value in pairs(buttonProperties) do
+        elementalHelmButton[prop] = value
+    end
+
+    -- Switch Button
+    local switchButton = Instance.new("TextButton")
+    switchButton.Position = UDim2.new(0.025, 0, 0.25, 0)
+    switchButton.Text = "Switch Element"
+    switchButton.Parent = buttonFrame
+    for prop, value in pairs(buttonProperties) do
+        switchButton[prop] = value
+    end
+
+    -- Throw Ball Button
+    local throwBallButton = Instance.new("TextButton")
+    throwBallButton.Position = UDim2.new(0.025, 0, 0.475, 0)
+    throwBallButton.Text = "THROW BALL"
+    throwBallButton.Parent = buttonFrame
+    for prop, value in pairs(buttonProperties) do
+        throwBallButton[prop] = value
+    end
+
+    -- Cooldown Labels
+    local elementalHelmCooldown = Instance.new("TextLabel")
+    elementalHelmCooldown.Size = UDim2.new(1, 0, 1, 0)
+    elementalHelmCooldown.BackgroundTransparency = 0.7
+    elementalHelmCooldown.BackgroundColor3 = Color3.new(0, 0, 0)
+    elementalHelmCooldown.TextScaled = true
+    elementalHelmCooldown.TextColor3 = Color3.new(1, 1, 1)
+    elementalHelmCooldown.Font = Enum.Font.SourceSansBold
+    elementalHelmCooldown.Visible = false
+    elementalHelmCooldown.Parent = elementalHelmButton
+
+    local switchCooldown = Instance.new("TextLabel")
+    switchCooldown.Size = UDim2.new(1, 0, 1, 0)
+    switchCooldown.BackgroundTransparency = 0.7
+    switchCooldown.BackgroundColor3 = Color3.new(0, 0, 0)
+    switchCooldown.TextScaled = true
+    switchCooldown.TextColor3 = Color3.new(1, 1, 1)
+    switchCooldown.Font = Enum.Font.SourceSansBold
+    switchCooldown.Visible = false
+    switchCooldown.Parent = switchButton
+
+    local throwBallCooldown = Instance.new("TextLabel")
+    throwBallCooldown.Size = UDim2.new(1, 0, 1, 0)
+    throwBallCooldown.BackgroundTransparency = 0.7
+    throwBallCooldown.BackgroundColor3 = Color3.new(0, 0, 0)
+    throwBallCooldown.TextScaled = true
+    throwBallCooldown.TextColor3 = Color3.new(1, 1, 1)
+    throwBallCooldown.Font = Enum.Font.SourceSansBold
+    throwBallCooldown.Visible = false
+    throwBallCooldown.Parent = throwBallButton
+
+    -- Store button references
+    abilityButtons = {
+        ElementalHelm = elementalHelmButton,
+        ElementalHelmCooldown = elementalHelmCooldown,
+        Switch = switchButton,
+        SwitchCooldown = switchCooldown,
+        ThrowBall = throwBallButton,
+        ThrowBallCooldown = throwBallCooldown
+    }
+
+    -- Connect buttons
+    elementalHelmButton.MouseButton1Click:Connect(useElementalHelm)
+    switchButton.MouseButton1Click:Connect(useSwitch)
+    throwBallButton.MouseButton1Click:Connect(useThrowBall)
+end
+
+-- Initialize
+if isRingmaster() then
+    updateExpressions()
+    loadAbilityGUI()
+    
+    humanoid.Running:Connect(function(speed)
+        if isInAttackPose then
+            if speed > 0 then
+                playAnimation("AttackPoseWalk")
+            else
+                playAnimation("AttackPoseIdle")
+            end
+        elseif humanoid.Health < humanoid.MaxHealth * 0.5 then
+            if speed > 16 then
+                playAnimation("InjuredRun")
+            elseif speed > 0 then
+                playAnimation("InjuredWalk")
+            else
+                playAnimation("InjuredIdle")
+            end
+        else
+            if speed > 16 then
+                playAnimation("Run")
+            elseif speed > 0 then
+                playAnimation("Walk")
+            else
+                playAnimation("Idle")
+            end
+        end
+    end)
+    
+    humanoid:GetPropertyChangedSignal("Health"):Connect(function()
+        if isInAttackPose then return end
+        
+        if humanoid.Health < humanoid.MaxHealth * 0.5 then
+            if humanoid.MoveDirection.Magnitude > 0 then
+                if humanoid.WalkSpeed > 16 then
+                    playAnimation("InjuredRun")
+                else
+                    playAnimation("InjuredWalk")
+                end
+            else
+                playAnimation("InjuredIdle")
+            end
+        else
+            if humanoid.MoveDirection.Magnitude > 0 then
+                if humanoid.WalkSpeed > 16 then
+                    playAnimation("Run")
+                else
+                    playAnimation("Walk")
+                end
+            else
+                playAnimation("Idle")
+            end
+        end
+    end)
+end
